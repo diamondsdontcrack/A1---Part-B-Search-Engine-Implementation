@@ -11,8 +11,10 @@ Tokens are already cleaned before they reach this function. Use them as-is.
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
-from .io import dump
+from utils.ngram import make_ngrams_chars
+from utils.positions import make_positions
 
+from .io import dump
 
 def create_all_indexes(
     tokenized_docs: List[List[str]],
@@ -82,6 +84,22 @@ def create_all_indexes(
     # See the Week 04 lecture sections "k-gram Index" and
     # "Wildcard Expansion Pipeline".
     # TODO(Task 1): populate package["wildcard"].
+    for term in package["unified"]:
+        for n in range(1, 4):
+            grams = make_ngrams_chars(term, n)
+            for gram in grams:
+                if gram == "$":
+                    continue
+                if gram not in package["wildcard"]:
+                    package["wildcard"][gram] = []
+
+                package["wildcard"][gram].append(term)
+
+    # sorted in lexicographical order and de-duplicated
+    for gram in package["wildcard"]:
+        package["wildcard"][gram] = sorted(set(package["wildcard"][gram]))
+                
+    
     #
     # positional index:
     # Part A Task 2 provides positions for one token list. Adapt that work by
@@ -89,6 +107,14 @@ def create_all_indexes(
     # the Week 04 lecture section "Positional Index" for the resulting
     # term -> document ID -> positions structure.
     # TODO(Task 1): populate package["proximity"].
+    for doc_id, tokens in zip(doc_ids, tokenized_docs):
+        positions = make_positions(tokens)
+
+        for term, position_list in positions.items():
+            if term not in package["proximity"]:
+                package["proximity"][term] = {}    
+
+            package["proximity"][term][doc_id] = position_list
     #
     # The package schema and serialization stage are already provided below.
     # Required behaviour:
