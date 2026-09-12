@@ -11,7 +11,33 @@ def _generate_wildcard_candidates(pattern: str, index_path: str) -> List[str]:
     # Week 04 lecture sections "k-gram Index" and
     # "Wildcard Expansion Pipeline".
     # TODO(Task 1): generate and combine candidate vocabulary terms.
-    raise NotImplementedError
+    
+    # say user searches for "learn*ing", prefix will be "learn" and suffix will be "ing"
+    prefix, suffix = pattern.split("*")
+    ngrams = []
+
+    if prefix:
+        # wildcard index has n-grams max length of 3 and $ occupies 1
+        # will generate $le
+        ngrams.append("$" + prefix[:2])
+
+    if suffix:
+        # will generate "ng$"
+        ngrams.append(suffix[-2:] + "$")
+
+    candidate_terms = None
+
+    for ngram in ngrams:
+        # use n_gram index built earlier from builders.py accessed through access.py
+        matches = set(find_wildcard_matches(ngram, index_path))
+
+        if candidate_terms is None:
+            candidate_terms = matches
+        else: candidate_terms &= matches
+
+    # this function's job is to return a list of terms that might match
+    # example candidates = ["learning", "leaning", "leaping", "leading"]
+    return sorted(candidate_terms) if candidate_terms is not None else []
 
 
 def _filter_wildcard_candidates(
@@ -31,8 +57,20 @@ def _filter_wildcard_candidates(
 
     # TODO(Task 1): adapt the workshop helper for an internal wildcard pattern
     # such as learn*ing.
-    raise NotImplementedError
 
+    # this function's job is to check if previous function's candidate terms start and end correctly.
+    # e.g. learning.startswith("learn") ✅ and learning.endswith("ing") ✅    -> true
+    # e.g. leaning.startswith("learn") ❌  and leaning.endswith("ing") ✅     -> false
+    # e.g. leaping.startswith("learn") ❌  and leaping.endswith("ing") ✅     -> false
+    # e.g. leading.startswith("learn") ❌  and leading.endswith("ing") ✅     -> false
+    prefix, suffix = pattern.split("*")
+
+    matching_terms = []
+    for term in candidates:
+        if term.startswith(prefix) and term.endswith(suffix) and len(term) >= len(prefix) + len(suffix):
+            matching_terms.append(term)
+
+    return sorted(matching_terms)
 
 def _matching_terms_to_doc_ids(
     matched_terms: List[str],
@@ -42,7 +80,15 @@ def _matching_terms_to_doc_ids(
     # This is the matched terms -> posting lists -> document IDs stage in the
     # Week 04 lecture section "Wildcard Expansion Pipeline".
     # TODO(Task 1): combine the posting lists.
-    raise NotImplementedError
+
+    # e.g. learning --> {10, 30}
+    doc_ids: Set[int] = set()
+
+    for term in matched_terms:
+        doc_ids.update(get_posting_list(term, index_path))
+
+    # returns a set containing {10, 30}
+    return doc_ids
 
 
 def process_wildcard_query(pattern: str, index_path: str) -> Set[int]:
