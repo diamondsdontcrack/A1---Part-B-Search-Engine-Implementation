@@ -107,6 +107,7 @@ def create_all_indexes(
     # the Week 04 lecture section "Positional Index" for the resulting
     # term -> document ID -> positions structure.
     # TODO(Task 1): populate package["proximity"].
+    
     for doc_id, tokens in zip(doc_ids, tokenized_docs):
         positions = make_positions(tokens)
 
