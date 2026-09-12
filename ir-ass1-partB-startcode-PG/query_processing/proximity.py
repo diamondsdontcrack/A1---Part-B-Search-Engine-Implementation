@@ -26,21 +26,37 @@ def _filter_candidates_by_distance(
     final_set: Set[int] = set()
 
     for doc_id in candidate_doc_ids:
+        # get positions of left and right word for current document
         left_positions = get_term_positions(left_word, doc_id, index_path)
         right_positions = get_term_positions(right_word, doc_id, index_path)
 
-        # a word can occur multiple times in the same document, some might be near some might not
-        for left_pos in left_positions:
-            for right_pos in right_positions:
-                # if same term and same position then ignore
-                if left_word == right_word and left_pos == right_pos: continue
-
-                # abs(left_word position - right_word position) <= k then all good
-                if abs(left_pos - right_pos) <= k:
+        # improved version (v2) using a variation of 2 pointer algorithm instead of a triple nested for loop.
+        # when encountering case climate NEAR/k climate
+        if left_word == right_word: # e.g left_positions = [2, 7, 8, 15] means same document has 4 distinct "climate"
+            for i in range(len(left_positions) - 1):
+                # 
+                if left_positions[i+1] - left_positions[i] <= k:
                     final_set.add(doc_id)
                     break
-            # alr one matching pair so no need to check for more pairs
-            if doc_id in final_set: break
+            continue
+
+        # when encountering any other case
+        i,j = 0, 0
+
+        while i < len(left_positions) and j < len(right_positions):
+            left_pos = left_positions[i]
+            right_pos = right_positions[j]
+
+            # abs(left_word position - right_word position) <= k then all good
+            if abs(left_pos - right_pos) <= k:
+                final_set.add(doc_id)
+                break
+
+            # move whichever position is further behind
+            if left_pos < right_pos:
+                i += 1
+            else:
+                j += 1
 
     return final_set
 
