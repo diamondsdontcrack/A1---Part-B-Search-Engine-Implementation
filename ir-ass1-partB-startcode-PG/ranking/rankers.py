@@ -51,7 +51,8 @@ def _rank_bm25(
         doc_ids: List[int], 
         inverted_index_path: str, 
         k1: float = 1.2, 
-        b: float = 0.75
+        b: float = 0.75,
+        coverage_weight: float = 0.0
         ) -> Tuple[List[int], List[float]]:
     """
     # example input from query_toks = ["machine", "learning"]
@@ -75,10 +76,15 @@ def _rank_bm25(
     # each document gets one final score
     scores = []
 
+    # experiment: how many unique terms does each document match
+    unique_query_terms = set(query_toks)
+
     # for each query term, extract its corpus df and tf
     for doc_id in doc_ids:
         # running total BM25 score for current document
         running_total_BM25 = 0.0
+
+        matched_terms = set()
 
         for term in query_toks:
             # does query_term even exist in corpus? e.g. ["climate", "afasdfafv"]
@@ -97,6 +103,8 @@ def _rank_bm25(
             if posting is None:
                 continue
 
+            matched_terms.add(term)
+            
             tf = posting["tf"]
 
             # atp we have everything we need for BM25: N, doc_lengths, avgdl, df, tf, k1, b
@@ -114,7 +122,13 @@ def _rank_bm25(
 
             running_total_BM25 += term_score
 
-        scores.append((int(doc_id), float(running_total_BM25)))
+        if unique_query_terms:
+            coverage = len(matched_terms) / len(unique_query_terms)
+        else: coverage = 0.0
+
+        final_score = running_total_BM25 + (coverage_weight * coverage)
+
+        scores.append((int(doc_id), float(final_score)))
 
 
     # sort scores by descending and doc_id in ascending in case of ties
@@ -179,7 +193,7 @@ def rank_documents(
 
     # Before final submission, set this to the real method name that performs
     # best on the dev evaluation, for example: "tfidf" or "bm25".
-    best_method = "keyword_match"
+    best_method = "bm25"
 
     if method == "default":
         method = best_method
@@ -192,6 +206,4 @@ def rank_documents(
 
     # TODO(Task 2): add optional experimental branches here, for example:
     elif method == "bm25":
-        return _rank_bm25(query_toks, candidate_docs, doc_ids, inverted_index_path)
-
-    
+        return _rank_bm25(query_toks, candidate_docs, doc_ids, inverted_index_path, k1=3, b=0.5)
