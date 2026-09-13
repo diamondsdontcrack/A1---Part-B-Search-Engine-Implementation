@@ -6,6 +6,7 @@ methods.
 """
 
 from typing import List, Sequence, Tuple
+from index.io import load
 
 import numpy as np
 
@@ -43,6 +44,88 @@ def _rank_keyword_match(
     scores = [float(score) for _, score in scored]
     return ranked_ids, scores
 
+# BM25 using our index 
+def _rank_bm25(
+        query_toks: List[str], 
+        candidate_docs: List[List[str]], 
+        doc_ids: List[int], 
+        inverted_index_path: str, 
+        k1: float = 1.2, 
+        b: float = 0.75
+        ) -> Tuple[List[int], List[float]]:
+    """
+    # example input from query_toks = ["machine", "learning"]
+    # example input from candidate_docs = [ ["machine", "learning", "model"], ["machine", "factory"], ["football", "match"] ]
+    # example input from doc_ids = [191, 279, 305] e.g. doc 191 contains "machine", "learning", "model", etc.
+    # k1, b are BM25 settings controlling how much repetition saturates and document length affects the score respectively
+    # example expected output = ( [191, 279, 305], [3.72. 1.14, 0.0]) e.g. doc 191 has score of 3.72
+    # higher score = better. Therefore Rank 1: doc 191 with score 3.72, Rank 2: doc 279 ...
+    # break ties with ascending doc_id e.g. if doc 191: 3.72 and doc 279: 3.72 then doc 191 is ranked 1
+    """
+
+    package = load(inverted_index_path)
+
+    meta = package["__META__"]
+    unified = package["unified"]
+
+    N = meta["N"]
+    doc_lengths = meta["doc_lengths"]
+    avgdl = meta["avgdl"]
+
+    # each document gets one final score
+    scores = []
+
+    # for each query term, extract its corpus df and tf
+    for doc_id in doc_ids:
+        # running total BM25 score for current document
+        running_total_BM25 = 0.0
+
+        for term in query_toks:
+            # does query_term even exist in corpus? e.g. ["climate", "afasdfafv"]
+            if term not in unified:
+                continue
+
+            term_data = unified[term]
+            df = term_data["df"]
+
+            # current candidate doc_id may not contain our current evaluated term
+            # but the candidate doc_id is here because it contained other terms
+            # e.g. candidate doc_id = [10, 20, 30, 50] and term_queries = ["climate", "change", "affects", "poop"]
+            # we are currently evaluating "climate" and doc 10 but doc 10 may not have "climate"; it is here because it may contain other term queries like "poop"
+            # but if we tried to get doc 10 from "climate"'s posting, we'll get a KeyError: 10
+            posting = term_data["postings"].get(doc_id)
+            if posting is None:
+                continue
+
+            tf = posting["tf"]
+
+            # atp we have everything we need for BM25: N, doc_lengths, avgdl, df, tf, k1, b
+            # BM25 formula for one query term in one document: IDF(term) * tf(k1 + 1) / (tf +k1(1 - b + (b * doc_lengths[doc_id]/avgdl)) )
+            current_document_length = doc_lengths[doc_id]
+            idf = np.log(1.0 + (N - df + 0.5) / (df + 0.5))
+
+            # is current document unusually long or short?
+            length_norm = 1.0 - b + b * (current_document_length / avgdl)
+
+            # accounting for document length, repeated occurences saturation rate
+            tf_component = (tf * (k1 + 1.0) / (tf +k1 * length_norm))
+
+            term_score = idf * tf_component
+
+            running_total_BM25 += term_score
+
+        scores.append((int(doc_id), float(running_total_BM25)))
+
+
+    # sort scores by descending and doc_id in ascending in case of ties
+    # example scores = [(305, 5.40), (191, 3.72), (279, 1.24)]
+    scores.sort(key=lambda item: (-item[1], item[0]))
+
+    # but output requires ([305, 191, 279], [5.40, 3.72, 1.24])
+    ranked_ids = [doc_id for doc_id, _ in scores]
+    ranked_scores = [score for _, score in scores]
+
+    return ranked_ids, ranked_scores
 
 def rank_documents(
     query_toks: List[str],
@@ -108,7 +191,7 @@ def rank_documents(
         return _rank_keyword_match(query_toks, candidate_docs, doc_ids)
 
     # TODO(Task 2): add optional experimental branches here, for example:
-    # elif method == "tfidf":
-    #     return ...
+    elif method == "bm25":
+        return _rank_bm25(query_toks, candidate_docs, doc_ids, inverted_index_path)
 
-    raise ValueError(f"Unknown ranking method: {method}")
+    
