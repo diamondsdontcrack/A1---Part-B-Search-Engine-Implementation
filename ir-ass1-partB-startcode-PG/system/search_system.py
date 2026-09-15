@@ -21,7 +21,10 @@ from typing import Dict, List, Set, Tuple
 from index.builders import create_all_indexes
 from query_processing.query_process import process_query
 from ranking.rankers import rank_documents
-
+from utils.text_preprocessing import preprocess
+from nltk.corpus import stopwords
+from collections import Counter
+import math
 
 _TASK1_FALLBACK_NOTE = (
     "Ranking all documents so Tasks 2 and 3 remain runnable. "
@@ -122,7 +125,14 @@ def _candidate_ids_for_query(
     system_method: str,
 ) -> Set[int]:
     """Select candidates, using all documents only when Task 1 is unavailable."""
-    if system_method not in {"no_optimisation", "default"}:
+    if system_method not in {
+        "no_optimisation",
+        "doc_cleaning",
+        "query_cleaning",
+        "preprocessing",
+        "prf",
+        "default",
+    }:
         raise ValueError(
             f"Unknown system method: {system_method}. "
             "Add a method branch in system/search_system.py."
@@ -178,6 +188,133 @@ def _rank_one_query(
         "scores": [float(score) for score in scores[:10]],
     }
 
+def _is_structured_query(query_text: str) -> bool:
+    """
+    Expected input:
+        query_text: Raw query string.
+
+    Expected output:
+        True if the query contains structured syntax such as Boolean operators,
+        parentheses, wildcard '*' or NEAR/k. Otherwise False.
+
+    Structured queries are detected so their special syntax is not changed
+    by normal text preprocessing. It needs to be preserved for Task 1's boolean.py
+    """
+    tokens = _basic_tokenize(query_text)
+
+    is_structured = any(
+        token in {"AND", "OR", "NOT", "(", ")"}
+        or token.startswith("NEAR/")
+        or "*" in token
+        for token in tokens
+    )
+
+    return is_structured
+
+def _clean_query_tokens(query_text: str) -> List[str]:
+    """
+    Expected input:
+        query_text: Raw query string.
+
+    Expected output:
+        List of query tokens.
+
+    Structured queries keep their syntax unchanged, while natural-language
+    queries use the same preprocessing as the document collection.
+    """
+    if _is_structured_query(query_text):
+        return _basic_tokenize(query_text)
+
+    return preprocess([query_text])[0]
+
+_STOPWORDS = set(stopwords.words("english"))
+
+def _document_frequencies(
+    tokenized_docs: List[List[str]]
+) -> Counter:
+    """
+    Expected input:
+        tokenized_docs: List of tokenised documents.
+
+    Expected output:
+        Counter mapping each term to the number of documents that contain it.
+
+    Document frequency is later used to calculate IDF when selecting
+    PRF expansion terms.
+    """
+    df = Counter()
+
+    for doc in tokenized_docs:
+        # set(doc) ensures a term contributes at most once per document
+        df.update(set(doc))
+
+    return df
+
+def _select_prf_terms(
+    top_doc_ids: List[int],
+    doc_to_tokens: Dict[int, List[str]],
+    query_toks: List[str],
+    doc_freq: Counter,
+    num_docs: int,
+    top_m: int,
+) -> List[str]:
+    """
+    Expected input:
+        top_doc_ids: IDs of the documents assumed to be pseudo-relevant.
+        doc_to_tokens: Maps each document ID to its token list.
+        query_toks: Tokens already present in the original query.
+        doc_freq: Corpus document frequency for each term.
+        num_docs: Total number of documents in the collection.
+        top_m: Number of expansion terms to return.
+
+    Expected output:
+        List of the top_m highest TF-IDF terms selected for query expansion.
+
+    Terms that are punctuation, stopwords or already in the query are ignored.
+    """
+
+    # count term frequency across the pseudo-relevant documents.
+    term_counts = Counter()
+
+    for doc_id in top_doc_ids:
+        term_counts.update(doc_to_tokens[doc_id])
+
+    query_terms = set(query_toks)
+    scored_terms = []
+
+    for term, tf in term_counts.items():
+
+        # ignore punctuation/numeric tokens
+        if not term.isalpha():
+            continue
+
+        # common words such as "the" and "is" are poor expansion terms.
+        if term in _STOPWORDS:
+            continue
+
+        # don't add words already present in the original query.
+        if term in query_terms:
+            continue
+
+        df = doc_freq[term]
+
+        # rare corpus terms receive higher IDF.
+        idf = math.log((num_docs + 1) / (df + 1))
+
+        # pPrefer terms frequent in the feedback docs but uncommon globally.
+        score = tf * idf
+
+        scored_terms.append((term, score))
+
+    # highest TF-IDF first, then alphabetical order for deterministic ties.
+    scored_terms.sort(
+        key=lambda item: (-item[1], item[0])
+    )
+
+    return [
+        term
+        for term, _ in scored_terms[:top_m]
+    ]
 
 def main() -> int:
     if len(sys.argv) not in (4, 5):
@@ -186,7 +323,14 @@ def main() -> int:
 
     queries_path, docs_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
     system_method = sys.argv[4] if len(sys.argv) == 5 else "default"
-    if system_method not in {"no_optimisation", "default"}:
+    if system_method not in {
+        "no_optimisation",
+        "doc_cleaning",
+        "query_cleaning",
+        "preprocessing",
+        "prf",
+        "default",
+    }:
         raise ValueError(
             f"Unknown system method: {system_method}. "
             "Use 'no_optimisation' or 'default', or add a new method branch."
@@ -213,12 +357,28 @@ def main() -> int:
     queries = _load_queries(queries_path)
     raw_docs, doc_texts = _load_docs(docs_path)
 
-    tokenized_docs = _tokenize_texts(doc_texts)
+    if system_method == "no_optimisation":
+        tokenized_docs = _tokenize_texts(doc_texts)
+
+    # use my part A text_preprocess.py
+    elif system_method == "doc_cleaning":
+        tokenized_docs = preprocess(doc_texts)
+
+    # query cleaning only, documents untouched
+    elif system_method == "query_cleaning":
+        tokenized_docs = _tokenize_texts(doc_texts)
+
+    # for final chosen optimisation method
+    elif system_method in {"preprocessing", "prf", "default"}:
+        tokenized_docs = preprocess(doc_texts)
+
     doc_ids = [int(doc["id"]) for doc in raw_docs]
     doc_to_tokens: Dict[int, List[str]] = {
         doc_id: toks
         for doc_id, toks in zip(doc_ids, tokenized_docs)
     }
+
+    doc_freq = _document_frequencies(tokenized_docs)
 
     index_path, index_ready = _build_index(tokenized_docs, doc_ids)
 
@@ -226,7 +386,12 @@ def main() -> int:
     for item in queries:
         qid = str(item["qid"])
         query_text = str(item["query"])
-        query_toks = _basic_tokenize(query_text)
+
+        if system_method in {"query_cleaning", "preprocessing", "prf", "default"}:
+            query_toks = _clean_query_tokens(query_text)
+        else:
+            query_toks = _basic_tokenize(query_text)
+
         query_for_processing = " ".join(query_toks)
         candidate_ids = _candidate_ids_for_query(
             query_text=query_for_processing,
@@ -236,7 +401,53 @@ def main() -> int:
             doc_ids=doc_ids,
             system_method=system_method,
         )
-        results.append(_rank_one_query(qid, query_toks, candidate_ids, doc_to_tokens, index_path))
+
+        if system_method in {"prf", "default"} and not _is_structured_query(query_text):
+
+
+            # first search (normal search using OG query)
+            initial_result = _rank_one_query(qid, query_toks, candidate_ids, doc_to_tokens, index_path,)
+
+            # assume top 3 initially searched docs are relevant
+            top_doc_ids = initial_result["doc_ids"][:3]
+
+            # extract the top N strongest TF-IDF terms from the above documents
+            expansion_terms = _select_prf_terms(
+                top_doc_ids=top_doc_ids,
+                doc_to_tokens=doc_to_tokens,
+                query_toks=query_toks,
+                doc_freq=doc_freq,
+                num_docs=len(tokenized_docs),
+                top_m=20,
+            )
+
+            # add feedback terms while preserving all OG query terms
+            expanded_query_toks = query_toks + expansion_terms
+            expanded_query_text = " ".join(expanded_query_toks)
+
+            # second retrieval (search again using the expanded query)
+            candidate_ids = _candidate_ids_for_query(
+                query_text=expanded_query_text,
+                qid=qid,
+                index_path=index_path,
+                index_ready=index_ready,
+                doc_ids=doc_ids,
+                system_method=system_method,
+            )
+
+            # second ranking using BM25
+            results.append(
+                _rank_one_query(
+                    qid,
+                    expanded_query_toks,
+                    candidate_ids,
+                    doc_to_tokens,
+                    index_path,
+                )
+            )
+
+        else:
+            results.append(_rank_one_query(qid, query_toks, candidate_ids, doc_to_tokens, index_path))
 
     output = pathlib.Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
