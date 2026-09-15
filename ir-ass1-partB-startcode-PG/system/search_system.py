@@ -301,7 +301,7 @@ def _select_prf_terms(
         # rare corpus terms receive higher IDF.
         idf = math.log((num_docs + 1) / (df + 1))
 
-        # pPrefer terms frequent in the feedback docs but uncommon globally.
+        # prefer terms frequent in the feedback docs but uncommon globally.
         score = tf * idf
 
         scored_terms.append((term, score))
